@@ -1399,8 +1399,8 @@ enum ScreenshotSupport {
     enum Tool: String, CaseIterable {
         // Case order is the default rail order and therefore the default
         // mapping for keys 1 through 9. Put the common actions first.
-        case select, arrow, pixelate, crop, text, sticker, rect, highlight,
-             freehand, line, ellipse, counter, redact
+           case select, arrow, pixelate, crop, text, sticker, rect, highlight,
+               freehand, line, ellipse, counter, redact, spotlight
 
         static let shortcutLimit = 9
 
@@ -1411,7 +1411,7 @@ enum ScreenshotSupport {
         /// Tools that create an annotation by dragging a rectangle.
         var dragsRect: Bool {
             switch self {
-            case .rect, .ellipse, .highlight, .pixelate, .redact: return true
+            case .rect, .ellipse, .highlight, .pixelate, .redact, .spotlight: return true
             case .select, .arrow, .line, .freehand, .text, .sticker, .counter, .crop:
                 return false
             }
@@ -1863,7 +1863,7 @@ enum ScreenshotSupport {
                                   blurLevel: annotation.blurLevel,
                                   blurStyle: annotation.blurStyle,
                                   blurTextOnly: annotation.blurTextOnly)
-        case .sticker, .select, .crop:
+        case .sticker, .select, .crop, .spotlight:
             return SelectionStyle(color: nil,
                                   stroke: nil,
                                   arrowStyle: nil)

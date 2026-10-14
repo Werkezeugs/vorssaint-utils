@@ -1930,6 +1930,67 @@ enum ScreenshotFeatureTests {
             context?.fill(CGRect(x: 0, y: 0, width: 20, height: 10))
             return context?.makeImage()
         }
+        if let spotlightBase = filled(0.8, 0.8, 0.8) {
+            func renderedSpotlightPixels(regions: [CGRect],
+                                         strength: CGFloat,
+                                         additionalAnnotations: [ScreenshotSupport.Annotation] = [])
+                -> [UInt8]? {
+                guard let export = ScreenshotRenderer.renderExport(
+                    baseImage: spotlightBase,
+                    annotations: additionalAnnotations
+                        + regions.map { ScreenshotSupport.Annotation(tool: .spotlight, rect: $0) },
+                    blurSources: .none,
+                    scale: 1,
+                    annotationShadowsEnabled: false,
+                    watermark: ScreenshotSupport.WatermarkStyle(),
+                    watermarkImage: nil,
+                    style: ScreenshotSupport.BackdropStyle(kind: .none, cornerRadius: 0),
+                    fill: .none,
+                    downscaleTo1x: false,
+                    spotlightDimStrength: strength)
+                else { return nil }
+                var pixels = [UInt8](repeating: 0, count: 20 * 10 * 4)
+                let read = pixels.withUnsafeMutableBytes { buffer -> Bool in
+                    guard let context = CGContext(data: buffer.baseAddress, width: 20, height: 10,
+                                                  bitsPerComponent: 8, bytesPerRow: 80,
+                                                  space: CGColorSpaceCreateDeviceRGB(),
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                    else { return false }
+                    context.draw(export.image, in: CGRect(x: 0, y: 0, width: 20, height: 10))
+                    return true
+                }
+                return read ? pixels : nil
+            }
+            func red(_ pixels: [UInt8]?, x: Int, y: Int) -> UInt8? {
+                guard let pixels else { return nil }
+                return pixels[(y * 20 + x) * 4]
+            }
+            let unchanged = renderedSpotlightPixels(regions: [], strength: 0.5)
+            let halfDim = renderedSpotlightPixels(
+                regions: [CGRect(x: 2, y: 2, width: 8, height: 6),
+                          CGRect(x: 8, y: 2, width: 8, height: 6)],
+                strength: 0.5)
+            let noDim = renderedSpotlightPixels(
+                regions: [CGRect(x: 2, y: 2, width: 8, height: 6)], strength: 0)
+            let fullDim = renderedSpotlightPixels(
+                regions: [CGRect(x: 2, y: 2, width: 8, height: 6)], strength: 1)
+            let annotationDim = renderedSpotlightPixels(
+                regions: [CGRect(x: 2, y: 2, width: 8, height: 6)],
+                strength: 0.5,
+                additionalAnnotations: [ScreenshotSupport.Annotation(
+                    tool: .redact,
+                    rect: CGRect(x: 16, y: 2, width: 3, height: 4),
+                    color: .white)])
+            suite.expect(red(unchanged, x: 1, y: 1) == 204
+                    && red(halfDim, x: 4, y: 4) == 204
+                    && red(halfDim, x: 9, y: 4) == 204
+                    && red(halfDim, x: 18, y: 4).map { (95...110).contains($0) } == true
+                    && red(noDim, x: 18, y: 4) == 204
+                    && red(fullDim, x: 18, y: 4) == 0
+                    && red(fullDim, x: 4, y: 4) == 204
+                    && red(annotationDim, x: 17, y: 3).map { (120...135).contains($0) } == true,
+                   "spotlight exports preserve every region, union overlaps, and dim only the outside")
+        }
         if let base = filled(0.5, 0.5, 0.5), let light = filled(1, 0, 0), let heavy = filled(0, 0, 1) {
             let marks = [
                 ScreenshotSupport.Annotation(tool: .pixelate,
@@ -2911,16 +2972,22 @@ enum ScreenshotFeatureTests {
                 && ScreenshotSupport.joinedWords(recognizedWords, selected: []).isEmpty,
                "out of range or empty selections copy nothing")
         let defaultScreenshotTools = ScreenshotSupport.Tool.allCases
-        suite.expect(defaultScreenshotTools.count == 13
+        suite.expect(defaultScreenshotTools.count == 14
                 && Array(defaultScreenshotTools.prefix(9))
                     == [.select, .arrow, .pixelate, .crop, .text, .sticker,
                         .rect, .highlight, .freehand],
                "the screenshot rail leads with the nine most useful numbered tools")
+        suite.expect(ScreenshotSupport.Tool.spotlight.dragsRect
+                && ScreenshotSupport.Tool.spotlight.resizesWithHandles
+                && ScreenshotSupport.selectionStyle(
+                    for: ScreenshotSupport.Annotation(tool: .spotlight))
+                    == ScreenshotSupport.SelectionStyle(color: nil, stroke: nil, arrowStyle: nil),
+               "spotlight regions use rectangle handles and have no annotation style controls")
         let customScreenshotTools = ScreenshotSupport.Tool.ordered(
             from: "crop,arrow,arrow,invalid")
         suite.expect(Array(customScreenshotTools.prefix(2)) == [.crop, .arrow]
-                && customScreenshotTools.count == 13
-                && Set(customScreenshotTools).count == 13,
+                && customScreenshotTools.count == 14
+                && Set(customScreenshotTools).count == 14,
                "a saved screenshot tool order drops invalid duplicates and appends missing tools")
         suite.expect(ScreenshotSupport.Tool.shortcutTool(number: 1,
                                                    orderRaw: nil,

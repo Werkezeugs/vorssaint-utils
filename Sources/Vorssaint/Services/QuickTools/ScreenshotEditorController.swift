@@ -12,6 +12,9 @@ import Vision
 final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
     @Published private(set) var baseImage: CGImage
     @Published var annotations: [ScreenshotSupport.Annotation] = []
+    @Published var spotlightDimStrength: CGFloat = 0.5 {
+        didSet { refreshDirtyState() }
+    }
     @Published var selectedID: UUID?
     @Published var editingTextID: UUID?
     @Published var tool: ScreenshotSupport.Tool {
@@ -182,6 +185,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
     private var cleanBackdropStyle = ScreenshotSupport.BackdropStyle()
     private var cleanWatermarkStyle = ScreenshotSupport.WatermarkStyle()
     private var cleanAnnotationShadowsEnabled = false
+    private var cleanSpotlightDimStrength: CGFloat = 0.5
 
     // Gesture state, in image pixels.
     private var dragStart: CGPoint = .zero
@@ -575,6 +579,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         cleanBackdropStyle = backdropStyle.sanitized()
         cleanWatermarkStyle = watermarkStyle.sanitized()
         cleanAnnotationShadowsEnabled = annotationShadowsEnabled
+        cleanSpotlightDimStrength = spotlightDimStrength
         isDirty = false
     }
 
@@ -585,6 +590,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             || backdropStyle.sanitized() != cleanBackdropStyle
             || watermarkStyle.sanitized() != cleanWatermarkStyle
             || annotationShadowsEnabled != cleanAnnotationShadowsEnabled
+            || spotlightDimStrength != cleanSpotlightDimStrength
     }
 
     // MARK: - Selection styling
@@ -684,7 +690,8 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         dragStart = point
         dragRegistered = false
         editingSelectedAnnotation = false
-        if tool != .select, tool != .crop, selectedAnnotationOwns(point) {
+          if tool != .select, tool != .crop, tool != .spotlight,
+              selectedAnnotationOwns(point) {
             editingSelectedAnnotation = true
             beginSelectDrag(at: point)
             return
@@ -725,7 +732,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
                 tool: tool, points: [point], color: color, stroke: stroke)
             annotations.append(annotation)
             draftID = annotation.id
-        case .rect, .ellipse, .highlight, .pixelate, .redact:
+        case .rect, .ellipse, .highlight, .pixelate, .redact, .spotlight:
             if tool == .pixelate { ensureBlurSample(blurStyle, level: blurLevel) }
             registerUndo()
             dragRegistered = true
@@ -808,7 +815,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             updateDraft { $0.points = [dragStart, point] }
         case .freehand:
             updateDraft { $0.points.append(point) }
-        case .rect, .ellipse, .highlight, .pixelate, .redact:
+        case .rect, .ellipse, .highlight, .pixelate, .redact, .spotlight:
             updateDraft { $0.rect = ScreenshotSupport.selectionRect(from: dragStart, to: point) }
         case .text, .sticker, .counter:
             break
@@ -907,7 +914,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             annotations.append(annotation)
             annotations = ScreenshotSupport.renumberingCounters(annotations)
             selectedID = annotation.id
-        case .arrow, .line, .rect, .ellipse, .highlight, .pixelate, .redact, .freehand:
+        case .arrow, .line, .rect, .ellipse, .highlight, .pixelate, .redact, .spotlight, .freehand:
             if isTap {
                 // A tap never leaves a degenerate shape behind; treat it as
                 // picking whatever is under the cursor instead.
@@ -1020,7 +1027,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
                     <= radius + 4 * scale {
                     return annotation.id
                 }
-        case .rect, .ellipse, .highlight, .pixelate, .redact:
+        case .rect, .ellipse, .highlight, .pixelate, .redact, .spotlight:
                 let outer = annotation.rect.insetBy(dx: -tolerance / 2, dy: -tolerance / 2)
                 guard outer.contains(point) else { continue }
                 if includeShapeInteriors {
@@ -1174,7 +1181,8 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             watermarkImage: watermarkImage,
             style: backdropStyle.sanitized(),
             fill: withBackdrop ? backdropFill : .none,
-            downscaleTo1x: downscale)
+            downscaleTo1x: downscale,
+            spotlightDimStrength: spotlightDimStrength)
     }
 
     /// Makes the sample a blur area of this style and level paints from, and

@@ -324,7 +324,8 @@ struct ScreenshotEditorView: View {
                                            imageSize: model.imageSize,
                                            scale: model.scale,
                                            annotationShadowsEnabled: model.annotationShadowsEnabled,
-                                           skippingText: model.editingTextID)
+                                           skippingText: model.editingTextID,
+                                           spotlightDimStrength: model.spotlightDimStrength)
         cg.restoreGState()
         if isolatesBlurAreas { cg.endTransparencyLayer() }
 
@@ -337,6 +338,10 @@ struct ScreenshotEditorView: View {
                                          scale: model.scale,
                                          shadowsEnabled: model.annotationShadowsEnabled,
                                          cornerRadius: model.cardCornerPixels)
+        ScreenshotRenderer.drawSpotlight(model.annotations,
+                         dimStrength: model.spotlightDimStrength,
+                         imageSize: model.imageSize,
+                         in: cg)
         drawTextSelection(cg)
         drawSelectionChrome(cg)
         drawCropChrome(cg, canvasSize: size, zoom: zoom)
@@ -893,9 +898,13 @@ struct ScreenshotEditorView: View {
             else { return false }
             return selected.tool != .sticker
                 && selected.tool != .pixelate
-        case .sticker, .pixelate, .crop:
+        case .sticker, .pixelate, .crop, .spotlight:
             return false
         }
+    }
+
+    private var showsSpotlightControls: Bool {
+        model.tool == .spotlight
     }
 
     private var showsBlurControls: Bool {
@@ -1012,6 +1021,22 @@ struct ScreenshotEditorView: View {
                 blurTextOnlyButton
                 if model.blurStyle.usesStrength {
                     blurLevelControl
+                }
+                Divider().frame(height: 16)
+            }
+            if showsSpotlightControls {
+                HStack(spacing: 6) {
+                    Text(strings.spotlightDimStrengthLabel)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Slider(value: $model.spotlightDimStrength, in: 0...1, step: 0.05)
+                        .frame(width: 92)
+                        .screenshotSafeHelp(strings.spotlightDimStrengthLabel)
+                        .accessibilityLabel(strings.spotlightDimStrengthLabel)
+                    Text("\(Int((model.spotlightDimStrength * 100).rounded()))%")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .frame(width: 30, alignment: .trailing)
                 }
                 Divider().frame(height: 16)
             }
@@ -1639,6 +1664,7 @@ extension ScreenshotSupport.Tool {
         case .pixelate: return "aqi.medium"
         case .redact: return "rectangle.fill"
         case .crop: return "crop"
+        case .spotlight: return "viewfinder"
         }
     }
 
@@ -1657,6 +1683,7 @@ extension ScreenshotSupport.Tool {
         case .pixelate: return strings.toolBlur
         case .redact: return strings.toolRedact
         case .crop: return strings.toolCrop
+        case .spotlight: return strings.toolSpotlight
         }
     }
 }
