@@ -43,7 +43,9 @@ enum ScreenshotRenderer {
 
     /// Draws every annotation over the base content. `blurSources` holds what
     /// blur areas paint from. Text being edited inline is skipped so the live
-    /// field is the only visible copy.
+    /// field is the only visible copy. The spotlight dim lands where the
+    /// topmost region that lights part of the image sits in the layer order,
+    /// so marks above it stay bright.
     static func drawAnnotations(_ annotations: [ScreenshotSupport.Annotation],
                                 in context: CGContext,
                                 blurSources: BlurSources,
@@ -53,7 +55,9 @@ enum ScreenshotRenderer {
                                 skippingText editingID: UUID? = nil,
                                 spotlightDimStrength: CGFloat = 0.5) {
         blurSources.eraseCache?.beginPass(image: blurSources.image, textRuns: blurSources.textRuns)
-        for annotation in annotations {
+        let bounds = CGRect(origin: .zero, size: imageSize)
+        let topSpotlight = annotations.lastIndex { litRegion($0, within: bounds) != nil }
+        for (index, annotation) in annotations.enumerated() {
             switch annotation.tool {
             case .pixelate:
                 drawBlurArea(annotation, in: context, sources: blurSources, imageSize: imageSize)
@@ -97,30 +101,50 @@ enum ScreenshotRenderer {
                 drawCounter(annotation, in: context, imageSize: imageSize, scale: scale,
                             shadowsEnabled: annotationShadowsEnabled)
             case .spotlight:
-                break
+                if index == topSpotlight {
+                    drawSpotlight(annotations, dimStrength: spotlightDimStrength,
+                                  imageSize: imageSize, in: context)
+                }
             case .select, .crop:
                 break
             }
         }
     }
 
-    static func drawSpotlight(_ annotations: [ScreenshotSupport.Annotation],
-                              dimStrength: CGFloat,
-                              imageSize: CGSize,
-                              in context: CGContext) {
-        let strength = dimStrength.isFinite ? min(max(dimStrength, 0), 1) : 0.5
-        let regions = annotations.compactMap { $0.tool == .spotlight ? $0.rect : nil }
-        guard !regions.isEmpty, strength > 0 else { return }
-        context.saveGState()
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        context.setBlendMode(.normal)
-        context.setFillColor(CGColor(gray: 0, alpha: strength))
-        context.fill(CGRect(origin: .zero, size: imageSize))
-        context.setBlendMode(.clear)
-        for region in regions {
-            context.fill(region)
+    /// The part of a spotlight region on the image, or nil when it lights
+    /// nothing there: still a bare press, or cropped away.
+    private static func litRegion(_ annotation: ScreenshotSupport.Annotation,
+                                  within bounds: CGRect) -> CGRect? {
+        guard annotation.tool == .spotlight else { return nil }
+        let region = annotation.rect.standardized.intersection(bounds)
+        return region.isEmpty ? nil : region
+    }
+
+    /// Darkens the image outside the union of the spotlight regions. Only
+    /// the parts of regions on the image count, so one cropped away or still
+    /// a bare press dims nothing. Source atop keeps the capture's alpha:
+    /// transparent window corners stay transparent.
+    private static func drawSpotlight(_ annotations: [ScreenshotSupport.Annotation],
+                                      dimStrength: CGFloat,
+                                      imageSize: CGSize,
+                                      in context: CGContext) {
+        let strength = ScreenshotSupport.sanitizedSpotlightDim(dimStrength)
+        let bounds = CGRect(origin: .zero, size: imageSize)
+        let regions = annotations.compactMap { litRegion($0, within: bounds) }
+        guard let first = regions.first, strength > 0 else { return }
+        let lit = regions.dropFirst().reduce(CGPath(rect: first, transform: nil)) {
+            $0.union(CGPath(rect: $1, transform: nil))
         }
-        context.endTransparencyLayer()
+        // Even-odd over the bounds plus the lit union fills only the outside,
+        // and overlapping regions are never dimmed twice.
+        let dimmed = CGMutablePath()
+        dimmed.addRect(bounds)
+        dimmed.addPath(lit)
+        context.saveGState()
+        context.setBlendMode(.sourceAtop)
+        context.setFillColor(CGColor(gray: 0, alpha: strength))
+        context.addPath(dimmed)
+        context.fillPath(using: .evenOdd)
         context.restoreGState()
     }
 
@@ -993,10 +1017,6 @@ enum ScreenshotRenderer {
                       scale: scale,
                       shadowsEnabled: annotationShadowsEnabled,
                       cornerRadius: cornerRadius)
-        drawSpotlight(annotations,
-                  dimStrength: spotlightDimStrength,
-                  imageSize: CGSize(width: width, height: height),
-                  in: context)
         return context.makeImage()
     }
 

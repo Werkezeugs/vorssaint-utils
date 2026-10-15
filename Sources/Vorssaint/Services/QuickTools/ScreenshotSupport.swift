@@ -1399,8 +1399,8 @@ enum ScreenshotSupport {
     enum Tool: String, CaseIterable {
         // Case order is the default rail order and therefore the default
         // mapping for keys 1 through 9. Put the common actions first.
-           case select, arrow, pixelate, crop, text, sticker, rect, highlight,
-               freehand, line, ellipse, counter, redact, spotlight
+        case select, arrow, pixelate, crop, text, sticker, rect, highlight,
+             freehand, line, ellipse, counter, redact, spotlight
 
         static let shortcutLimit = 9
 
@@ -1668,6 +1668,23 @@ enum ScreenshotSupport {
     /// The preset one step away from `size`, or nil at either end.
     static func steppedTextSize(from size: Int, up: Bool) -> Int? {
         up ? textSizes.first(where: { $0 > size }) : textSizes.last(where: { $0 < size })
+    }
+
+    /// How dark a spotlight turns everything outside its regions, from 0
+    /// (untouched) to 1 (black).
+    static let defaultSpotlightDim: CGFloat = 0.5
+
+    /// A stored or passed dim kept within 0...1; an unreadable one falls
+    /// back to the default.
+    static func sanitizedSpotlightDim(_ strength: CGFloat) -> CGFloat {
+        strength.isFinite ? min(max(strength, 0), 1) : defaultSpotlightDim
+    }
+
+    /// The dim the editor's control settles on: the nearest 5% step, so a
+    /// continuous slider needs no tick marks and the spoken percent stays
+    /// whole.
+    static func steppedSpotlightDim(_ strength: CGFloat) -> CGFloat {
+        (sanitizedSpotlightDim(strength) * 20).rounded() / 20
     }
 
     /// How hard a blur hides what is under it, from 1 (lightest) to 5

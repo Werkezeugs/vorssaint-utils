@@ -12,8 +12,14 @@ import Vision
 final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
     @Published private(set) var baseImage: CGImage
     @Published var annotations: [ScreenshotSupport.Annotation] = []
-    @Published var spotlightDimStrength: CGFloat = 0.5 {
-        didSet { refreshDirtyState() }
+    /// How dark a spotlight turns everything outside its regions,
+    /// remembered between captures like the blur strength.
+    @Published var spotlightDimStrength: CGFloat {
+        didSet {
+            UserDefaults.standard.set(Double(spotlightDimStrength),
+                                      forKey: DefaultsKey.screenshotSpotlightDim)
+            refreshDirtyState()
+        }
     }
     @Published var selectedID: UUID?
     @Published var editingTextID: UUID?
@@ -236,6 +242,8 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         blurStyle = ScreenshotSupport.BlurStyleID.sanitized(
             defaults.string(forKey: DefaultsKey.screenshotLastBlurStyle))
         blurTextOnly = defaults.bool(forKey: DefaultsKey.screenshotLastBlurTextOnly)
+        spotlightDimStrength = ScreenshotSupport.sanitizedSpotlightDim(
+            CGFloat(defaults.double(forKey: DefaultsKey.screenshotSpotlightDim)))
         arrowStyle = ScreenshotSupport.ArrowStyleID.sanitized(
             defaults.string(forKey: DefaultsKey.screenshotLastArrowStyle))
         sticker = ScreenshotSupport.StickerID.sanitized(
@@ -590,7 +598,9 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             || backdropStyle.sanitized() != cleanBackdropStyle
             || watermarkStyle.sanitized() != cleanWatermarkStyle
             || annotationShadowsEnabled != cleanAnnotationShadowsEnabled
-            || spotlightDimStrength != cleanSpotlightDimStrength
+            // Without a region the dim changes nothing in the output.
+            || (spotlightDimStrength != cleanSpotlightDimStrength
+                && annotations.contains { $0.tool == .spotlight })
     }
 
     // MARK: - Selection styling
@@ -690,8 +700,10 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         dragStart = point
         dragRegistered = false
         editingSelectedAnnotation = false
-          if tool != .select, tool != .crop, tool != .spotlight,
-              selectedAnnotationOwns(point) {
+        // A spotlight region claims only its handles and edge, so a drag
+        // inside the one just drawn lights another region.
+        if tool != .select, tool != .crop,
+           selectedAnnotationOwns(point, includingInterior: tool != .spotlight) {
             editingSelectedAnnotation = true
             beginSelectDrag(at: point)
             return
@@ -937,7 +949,8 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
 
     /// The visible selection remains directly editable after creation. A new
     /// tool or a gesture outside it ends that priority and creates normally.
-    func selectedAnnotationOwns(_ point: CGPoint) -> Bool {
+    /// Without the interior, an area mark answers only at its handles and edge.
+    func selectedAnnotationOwns(_ point: CGPoint, includingInterior: Bool = true) -> Bool {
         guard let selectedID,
               let selected = annotations.first(where: { $0.id == selectedID })
         else { return false }
@@ -952,7 +965,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         }) {
             return true
         }
-        return hitTest(point) == selectedID
+        return hitTest(point, includeShapeInteriors: includingInterior) == selectedID
     }
 
     private func finishSelectDrag(at point: CGPoint, isTap: Bool) {

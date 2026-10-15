@@ -213,17 +213,7 @@ struct ScreenshotEditorView: View {
         .onContinuousHover { phase in
             switch phase {
             case .active(let location):
-                let point = imagePoint(from: location, zoom: zoom)
-                if model.tool != .select, model.selectedAnnotationOwns(point) {
-                    NSCursor.openHand.set()
-                } else if model.tool != .select {
-                    NSCursor.crosshair.set()
-                } else if model.wordIndex(at: point) != nil {
-                    // Recognized text under the cursor reads as text.
-                    NSCursor.iBeam.set()
-                } else {
-                    NSCursor.arrow.set()
-                }
+                updateHoverCursor(at: imagePoint(from: location, zoom: zoom))
             case .ended:
                 NSCursor.arrow.set()
             }
@@ -338,10 +328,6 @@ struct ScreenshotEditorView: View {
                                          scale: model.scale,
                                          shadowsEnabled: model.annotationShadowsEnabled,
                                          cornerRadius: model.cardCornerPixels)
-        ScreenshotRenderer.drawSpotlight(model.annotations,
-                         dimStrength: model.spotlightDimStrength,
-                         imageSize: model.imageSize,
-                         in: cg)
         drawTextSelection(cg)
         drawSelectionChrome(cg)
         drawCropChrome(cg, canvasSize: size, zoom: zoom)
@@ -418,6 +404,22 @@ struct ScreenshotEditorView: View {
     private func imagePoint(from viewPoint: CGPoint, zoom: CGFloat) -> CGPoint {
         let pad = model.backdropPaddingPixels
         return CGPoint(x: viewPoint.x / zoom - pad, y: viewPoint.y / zoom - pad)
+    }
+
+    private func updateHoverCursor(at point: CGPoint) {
+        // The same rule a press follows: a spotlight region offers only its
+        // handles and edge while its tool is active.
+        if model.tool != .select,
+           model.selectedAnnotationOwns(point, includingInterior: model.tool != .spotlight) {
+            NSCursor.openHand.set()
+        } else if model.tool != .select {
+            NSCursor.crosshair.set()
+        } else if model.wordIndex(at: point) != nil {
+            // Recognized text under the cursor reads as text.
+            NSCursor.iBeam.set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 
     // MARK: - Crop loupe
@@ -898,13 +900,21 @@ struct ScreenshotEditorView: View {
             else { return false }
             return selected.tool != .sticker
                 && selected.tool != .pixelate
+                && selected.tool != .spotlight
         case .sticker, .pixelate, .crop, .spotlight:
             return false
         }
     }
 
+    /// A picked region keeps the dim control, so its strength changes
+    /// without going back to the tool.
     private var showsSpotlightControls: Bool {
-        model.tool == .spotlight
+        if model.tool == .spotlight { return true }
+        guard model.tool == .select,
+              let selectedID = model.selectedID,
+              let selected = model.annotations.first(where: { $0.id == selectedID })
+        else { return false }
+        return selected.tool == .spotlight
     }
 
     private var showsBlurControls: Bool {
@@ -1025,19 +1035,7 @@ struct ScreenshotEditorView: View {
                 Divider().frame(height: 16)
             }
             if showsSpotlightControls {
-                HStack(spacing: 6) {
-                    Text(strings.spotlightDimStrengthLabel)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Slider(value: $model.spotlightDimStrength, in: 0...1, step: 0.05)
-                        .frame(width: 92)
-                        .screenshotSafeHelp(strings.spotlightDimStrengthLabel)
-                        .accessibilityLabel(strings.spotlightDimStrengthLabel)
-                    Text("\(Int((model.spotlightDimStrength * 100).rounded()))%")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .monospacedDigit()
-                        .frame(width: 30, alignment: .trailing)
-                }
+                spotlightDimControl
                 Divider().frame(height: 16)
             }
             if showsColorControls {
@@ -1332,6 +1330,43 @@ struct ScreenshotEditorView: View {
             @unknown default: break
             }
         }
+    }
+
+    /// From leaving the outside untouched to turning it black, shaped like
+    /// the blur strength control beside it. A stepped slider would draw 21
+    /// tick marks, so it stays continuous and its value settles on 5% steps.
+    private var spotlightDimControl: some View {
+        let step: CGFloat = 0.05
+        return HStack(spacing: 5) {
+            // Daylight to night reads at 11 pt; sun.max and sun.min do not.
+            Image(systemName: "sun.max.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            Slider(value: spotlightDimValue, in: 0...1)
+                .controlSize(.mini)
+                .frame(width: 84)
+            Image(systemName: "moon.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(height: 24)
+        .screenshotSafeHelp(strings.spotlightDimStrengthLabel)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(strings.spotlightDimStrengthLabel)
+        .accessibilityValue(Double(model.spotlightDimStrength)
+            .formatted(.percent.precision(.fractionLength(0))))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: spotlightDimValue.wrappedValue = model.spotlightDimStrength + step
+            case .decrement: spotlightDimValue.wrappedValue = model.spotlightDimStrength - step
+            @unknown default: break
+            }
+        }
+    }
+
+    private var spotlightDimValue: Binding<CGFloat> {
+        Binding(get: { model.spotlightDimStrength },
+                set: { model.spotlightDimStrength = ScreenshotSupport.steppedSpotlightDim($0) })
     }
 
     private func textSizeStepButton(up: Bool) -> some View {

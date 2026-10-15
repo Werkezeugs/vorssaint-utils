@@ -1931,32 +1931,38 @@ enum ScreenshotFeatureTests {
             return context?.makeImage()
         }
         if let spotlightBase = filled(0.8, 0.8, 0.8) {
-            func renderedSpotlightPixels(regions: [CGRect],
+            func spot(_ rect: CGRect) -> ScreenshotSupport.Annotation {
+                ScreenshotSupport.Annotation(tool: .spotlight, rect: rect)
+            }
+            func renderedSpotlightPixels(_ annotations: [ScreenshotSupport.Annotation],
                                          strength: CGFloat,
-                                         additionalAnnotations: [ScreenshotSupport.Annotation] = [])
-                -> [UInt8]? {
+                                         base: CGImage? = nil,
+                                         watermark: ScreenshotSupport.WatermarkStyle = .init(),
+                                         watermarkImage: CGImage? = nil) -> [UInt8]? {
+                let base = base ?? spotlightBase
                 guard let export = ScreenshotRenderer.renderExport(
-                    baseImage: spotlightBase,
-                    annotations: additionalAnnotations
-                        + regions.map { ScreenshotSupport.Annotation(tool: .spotlight, rect: $0) },
+                    baseImage: base,
+                    annotations: annotations,
                     blurSources: .none,
                     scale: 1,
                     annotationShadowsEnabled: false,
-                    watermark: ScreenshotSupport.WatermarkStyle(),
-                    watermarkImage: nil,
+                    watermark: watermark,
+                    watermarkImage: watermarkImage,
                     style: ScreenshotSupport.BackdropStyle(kind: .none, cornerRadius: 0),
                     fill: .none,
                     downscaleTo1x: false,
                     spotlightDimStrength: strength)
                 else { return nil }
-                var pixels = [UInt8](repeating: 0, count: 20 * 10 * 4)
+                let width = base.width
+                let height = base.height
+                var pixels = [UInt8](repeating: 0, count: width * height * 4)
                 let read = pixels.withUnsafeMutableBytes { buffer -> Bool in
-                    guard let context = CGContext(data: buffer.baseAddress, width: 20, height: 10,
-                                                  bitsPerComponent: 8, bytesPerRow: 80,
+                    guard let context = CGContext(data: buffer.baseAddress, width: width, height: height,
+                                                  bitsPerComponent: 8, bytesPerRow: width * 4,
                                                   space: CGColorSpaceCreateDeviceRGB(),
                                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
                     else { return false }
-                    context.draw(export.image, in: CGRect(x: 0, y: 0, width: 20, height: 10))
+                    context.draw(export.image, in: CGRect(x: 0, y: 0, width: width, height: height))
                     return true
                 }
                 return read ? pixels : nil
@@ -1965,22 +1971,22 @@ enum ScreenshotFeatureTests {
                 guard let pixels else { return nil }
                 return pixels[(y * 20 + x) * 4]
             }
-            let unchanged = renderedSpotlightPixels(regions: [], strength: 0.5)
+            func alpha(_ pixels: [UInt8]?, x: Int, y: Int) -> UInt8? {
+                guard let pixels else { return nil }
+                return pixels[(y * 20 + x) * 4 + 3]
+            }
+            let region = CGRect(x: 2, y: 2, width: 8, height: 6)
+            let whiteMark = ScreenshotSupport.Annotation(
+                tool: .redact,
+                rect: CGRect(x: 16, y: 2, width: 3, height: 4),
+                color: .white)
+            let unchanged = renderedSpotlightPixels([], strength: 0.5)
             let halfDim = renderedSpotlightPixels(
-                regions: [CGRect(x: 2, y: 2, width: 8, height: 6),
-                          CGRect(x: 8, y: 2, width: 8, height: 6)],
+                [spot(region), spot(CGRect(x: 8, y: 2, width: 8, height: 6))],
                 strength: 0.5)
-            let noDim = renderedSpotlightPixels(
-                regions: [CGRect(x: 2, y: 2, width: 8, height: 6)], strength: 0)
-            let fullDim = renderedSpotlightPixels(
-                regions: [CGRect(x: 2, y: 2, width: 8, height: 6)], strength: 1)
-            let annotationDim = renderedSpotlightPixels(
-                regions: [CGRect(x: 2, y: 2, width: 8, height: 6)],
-                strength: 0.5,
-                additionalAnnotations: [ScreenshotSupport.Annotation(
-                    tool: .redact,
-                    rect: CGRect(x: 16, y: 2, width: 3, height: 4),
-                    color: .white)])
+            let noDim = renderedSpotlightPixels([spot(region)], strength: 0)
+            let fullDim = renderedSpotlightPixels([spot(region)], strength: 1)
+            let annotationDim = renderedSpotlightPixels([whiteMark, spot(region)], strength: 0.5)
             suite.expect(red(unchanged, x: 1, y: 1) == 204
                     && red(halfDim, x: 4, y: 4) == 204
                     && red(halfDim, x: 9, y: 4) == 204
@@ -1990,6 +1996,83 @@ enum ScreenshotFeatureTests {
                     && red(fullDim, x: 4, y: 4) == 204
                     && red(annotationDim, x: 17, y: 3).map { (120...135).contains($0) } == true,
                    "spotlight exports preserve every region, union overlaps, and dim only the outside")
+            let unreadableDim = renderedSpotlightPixels([spot(region)], strength: .nan)
+            suite.expect(red(unreadableDim, x: 18, y: 4).map { (95...110).contains($0) } == true
+                    && red(unreadableDim, x: 4, y: 4) == 204,
+                   "an unreadable spotlight strength dims at the default instead of skipping the dim")
+            let clearEdgeBase: CGImage? = {
+                let context = CGContext(data: nil, width: 20, height: 10, bitsPerComponent: 8,
+                                        bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                context?.setFillColor(CGColor(srgbRed: 0.8, green: 0.8, blue: 0.8, alpha: 1))
+                context?.fill(CGRect(x: 0, y: 0, width: 20, height: 10))
+                context?.clear(CGRect(x: 0, y: 0, width: 1, height: 10))
+                return context?.makeImage()
+            }()
+            let clearEdge = clearEdgeBase.flatMap {
+                renderedSpotlightPixels([spot(region)], strength: 0.5, base: $0)
+            }
+            suite.expect(alpha(clearEdge, x: 0, y: 4) == 0
+                    && alpha(clearEdge, x: 18, y: 4) == 255
+                    && red(clearEdge, x: 18, y: 4).map { (95...110).contains($0) } == true,
+                   "a spotlight keeps transparent capture pixels transparent")
+            let offImage = renderedSpotlightPixels(
+                [spot(CGRect(x: 40, y: 0, width: 8, height: 8))], strength: 0.5)
+            let barePress = renderedSpotlightPixels(
+                [spot(CGRect(x: 5, y: 5, width: 0, height: 0))], strength: 0.5)
+            suite.expect(unchanged != nil && offImage == unchanged && barePress == unchanged,
+                   "a spotlight region off the image or still a bare press leaves every pixel unchanged")
+            let markAbove = renderedSpotlightPixels([spot(region), whiteMark], strength: 0.5)
+            let markBetween = renderedSpotlightPixels(
+                [spot(CGRect(x: 2, y: 2, width: 4, height: 6)), whiteMark,
+                 spot(CGRect(x: 6, y: 2, width: 4, height: 6))],
+                strength: 0.5)
+            suite.expect(red(markAbove, x: 17, y: 3) == 255
+                    && red(markAbove, x: 13, y: 4).map { (95...110).contains($0) } == true
+                    && red(markBetween, x: 17, y: 3).map { (120...135).contains($0) } == true
+                    && red(markBetween, x: 4, y: 4) == 204
+                    && red(markBetween, x: 8, y: 4) == 204,
+                   "marks above the topmost spotlight region stay bright and marks below it dim")
+            let pressAbove = renderedSpotlightPixels(
+                [spot(region), whiteMark, spot(CGRect(x: 5, y: 5, width: 0, height: 0))],
+                strength: 0.5)
+            let offImageAbove = renderedSpotlightPixels(
+                [spot(region), whiteMark, spot(CGRect(x: 40, y: 0, width: 8, height: 8))],
+                strength: 0.5)
+            suite.expect(red(pressAbove, x: 17, y: 3) == 255
+                    && red(offImageAbove, x: 17, y: 3) == 255
+                    && red(pressAbove, x: 13, y: 4).map { (95...110).contains($0) } == true,
+                   "a bare press or a region off the image never moves the dim above a mark")
+            let side = 200
+            let stampContext = CGContext(data: nil, width: 20, height: 20, bitsPerComponent: 8,
+                                         bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            stampContext?.setFillColor(CGColor(gray: 1, alpha: 1))
+            stampContext?.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+            let largeContext = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                                         bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            largeContext?.setFillColor(CGColor(srgbRed: 0.8, green: 0.8, blue: 0.8, alpha: 1))
+            largeContext?.fill(CGRect(x: 0, y: 0, width: side, height: side))
+            if let stamp = stampContext?.makeImage(), let largeBase = largeContext?.makeImage() {
+                let mark = ScreenshotSupport.WatermarkStyle(kind: .image, imagePath: "/logo.png",
+                                                            anchor: .bottomTrailing, size: 0.2,
+                                                            opacity: 1, rotation: 0)
+                let plain = renderedSpotlightPixels([], strength: 0.5, base: largeBase,
+                                                    watermark: mark, watermarkImage: stamp)
+                let lit = renderedSpotlightPixels([spot(CGRect(x: 10, y: 10, width: 40, height: 40))],
+                                                  strength: 0.5, base: largeBase,
+                                                  watermark: mark, watermarkImage: stamp)
+                let stamped: [Int] = plain.map { pixels in
+                    stride(from: 0, to: pixels.count, by: 4).filter { pixels[$0] == 255 }
+                } ?? []
+                let dimmedOutside = lit.map { (95...110).contains($0[(5 * side + 100) * 4]) } == true
+                suite.expect(stamped.count > 200 && dimmedOutside
+                        && lit.map { pixels in
+                            stamped.allSatisfy { pixels[$0] >= 253 && pixels[$0 + 3] == 255 }
+                        } == true,
+                       "an opaque watermark outside the spotlight regions keeps its pixels")
+            }
         }
         if let base = filled(0.5, 0.5, 0.5), let light = filled(1, 0, 0), let heavy = filled(0, 0, 1) {
             let marks = [
@@ -2593,6 +2676,8 @@ enum ScreenshotFeatureTests {
             encoding: .utf8)) ?? ""
         suite.expect(screenshotEditorViewSource.contains("isHovered || isActive ? 0.9 : 0.55"),
                "tool shortcut labels stay visible on idle rail buttons")
+        suite.expect(screenshotEditorViewSource.contains("Slider(value: spotlightDimValue, in: 0...1)\n"),
+               "the spotlight dim slider stays continuous, so it draws no tick marks")
         suite.expect(screenshotEditorSource.contains("syncControls(to: hit)"),
                "the editor synchronizes controls from the selected annotation")
         let existingSelectionSource: String
@@ -3464,6 +3549,12 @@ enum ScreenshotFeatureTests {
         suite.expect(Defaults.registeredDefaults[DefaultsKey.screenshotLastBlurLevel] as? Int
                 == ScreenshotSupport.BlurStrength.defaultLevel,
                "the pixelate tool starts at the strength it always had")
+        suite.expect(Defaults.registeredDefaults[DefaultsKey.screenshotSpotlightDim] as? Double == 0.5
+                && SettingsBackupSupport.exportKeys().contains(DefaultsKey.screenshotSpotlightDim)
+                && ScreenshotSupport.sanitizedSpotlightDim(1.4) == 1
+                && ScreenshotSupport.sanitizedSpotlightDim(-0.2) == 0
+                && ScreenshotSupport.sanitizedSpotlightDim(.infinity) == 0.5,
+               "the spotlight dim starts at half, stays within range and travels in backups")
         suite.expect(Defaults.registeredDefaults[DefaultsKey.screenshotLastBlurStyle] as? String
                 == ScreenshotSupport.BlurStyleID.pixelate.rawValue
                 && Defaults.registeredDefaults[DefaultsKey.screenshotLastBlurTextOnly] as? Bool == false
